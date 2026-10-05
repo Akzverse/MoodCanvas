@@ -1,0 +1,48 @@
+# Maven build outputs
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar
+
+# Local Maven cache if in project
+.m2/
+
+# Temporary files
+.tmp/
+*.tmp
+*.log
+
+# Eclipse project files
+.project
+.classpath
+.settings/
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# VS Code
+.vscode/
+
+# Environment and secrets
+.env
+*.local
+credentials.json
+
+# Operating System files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Local H2 Database files (if generated in workspace)
+*.mv.db
+*.trace.db

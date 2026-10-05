@@ -1,0 +1,2 @@
+package com.moodcanvas.model;
+public class User {private final int userID;private final String name,email,passwordHash,role,theme;public User(int id,String n,String e,String p,String r,String t){userID=id;name=n;email=e;passwordHash=p;role=r;theme=t;}public int getUserID(){return userID;}public String getName(){return name;}public String getEmail(){return email;}public String getPasswordHash(){return passwordHash;}public String getRole(){return role;}public String getTheme(){return theme;}}

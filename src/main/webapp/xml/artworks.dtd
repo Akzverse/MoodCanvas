@@ -1,0 +1,9 @@
+<!ELEMENT artworks (artwork+)>
+<!ELEMENT artwork (title, artist, year?, medium?, imageURL, mood)>
+<!ATTLIST artwork id ID #REQUIRED museum CDATA #REQUIRED>
+<!ELEMENT title (#PCDATA)>
+<!ELEMENT artist (#PCDATA)>
+<!ELEMENT year (#PCDATA)>
+<!ELEMENT medium (#PCDATA)>
+<!ELEMENT imageURL (#PCDATA)>
+<!ELEMENT mood (#PCDATA)>

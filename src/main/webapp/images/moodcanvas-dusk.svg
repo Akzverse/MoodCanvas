@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1000" role="img" aria-labelledby="title description">
+  <title id="title">A quiet, starry evening</title>
+  <desc id="description">An original illustration of a moonlit evening in warm and lavender colors.</desc>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0.9" y2="1"><stop stop-color="#3e3d63"/><stop offset=".52" stop-color="#817092"/><stop offset="1" stop-color="#e2a46e"/></linearGradient>
+    <radialGradient id="glow"><stop stop-color="#ffe5a7" stop-opacity=".75"/><stop offset="1" stop-color="#ffe5a7" stop-opacity="0"/></radialGradient>
+  </defs>
+  <rect width="800" height="1000" fill="url(#sky)"/>
+  <circle cx="574" cy="275" r="190" fill="url(#glow)"/>
+  <circle cx="574" cy="275" r="73" fill="#f7d79a"/>
+  <g fill="#fff1cb" opacity=".9"><circle cx="142" cy="136" r="5"/><circle cx="287" cy="205" r="4"/><circle cx="405" cy="115" r="5"/><circle cx="687" cy="131" r="4"/><circle cx="190" cy="348" r="4"/><circle cx="367" cy="302" r="3"/><circle cx="694" cy="389" r="5"/><circle cx="109" cy="477" r="3"/><circle cx="498" cy="443" r="4"/></g>
+  <g fill="none" stroke-linecap="round" opacity=".8"><path d="M65 274c53-37 113-36 169 0m-150 31c43-25 82-23 123 2" stroke="#d4b9bf" stroke-width="11"/><path d="M82 560c106-83 225-101 358-53 94 34 186 33 277-3" stroke="#f2bd87" stroke-width="19"/><path d="M-22 690c104-78 214-99 332-58 101 35 207 51 318 12 69-24 133-22 194 6" stroke="#cc8b72" stroke-width="20"/><path d="M-12 826c125-67 250-75 375-22 116 49 231 52 347 8 44-17 84-22 120-15" stroke="#725f80" stroke-width="24"/></g>
+  <path d="M0 865c136-69 259-78 379-26s247 58 369 8l52-18v171H0z" fill="#514c68" opacity=".91"/>
+  <path d="M0 941c142-41 281-35 418 18 109 42 236 49 382 20v21H0z" fill="#383953"/>
+</svg>

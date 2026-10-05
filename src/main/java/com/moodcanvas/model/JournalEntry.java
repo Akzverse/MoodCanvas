@@ -1,0 +1,3 @@
+package com.moodcanvas.model;
+import java.sql.Timestamp;
+public class JournalEntry {private final int journalID;private final String artworkID,title,artist,imageURL,museum;private final Timestamp savedAt;public JournalEntry(int i,String a,String t,String ar,String im,String m,Timestamp s){journalID=i;artworkID=a;title=t;artist=ar;imageURL=im;museum=m;savedAt=s;}public int getJournalID(){return journalID;}public String getArtworkID(){return artworkID;}public String getTitle(){return title;}public String getArtist(){return artist;}public String getImageURL(){return imageURL;}public String getMuseum(){return museum;}public Timestamp getSavedAt(){return savedAt;}}
