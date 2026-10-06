@@ -10,45 +10,68 @@
   var toast = document.querySelector('#toast');
   var toastTimer;
   var importForm = document.querySelector('#spotifyImportForm');
-  if (importForm) importForm.addEventListener('submit', function (event) {
-    event.preventDefault();
-    var input = document.querySelector('#spotifyLink');
-    var button = importForm.querySelector('button');
-    button.disabled = true;
-    fetch('../spotify/import', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ spotifyLink: input.value.trim() })
-    }).then(function (response) {
-      if (!response.ok) return response.text().then(function (message) {
-        if (response.status === 412) throw new Error('Connect Spotify first, then import your song or playlist.');
-        if (response.status === 502) throw new Error('Spotify could not read that playlist. Try a playlist owned by or shared with the connected account.');
-        throw new Error(message.replace(/<[^>]*>/g, '').slice(0, 220) || 'Could not import that Spotify link.');
-      });
-      return response.json();
-    }).then(function (result) {
-      area.value = result.text;
-      if (source) source.value = 'spotify';
-      Array.prototype.forEach.call(document.querySelectorAll('[data-mood]'), function (pill) { pill.classList.remove('active'); });
-      area.focus();
-      showToast('Imported ' + result.count + (result.count === 1 ? ' song' : ' songs') + '. Choose a mood or search.');
-    }).catch(function (error) {
+
+  if (importForm) {
+    importForm.addEventListener('submit', function (event) {
+      event.preventDefault();
+      var input = document.querySelector('#spotifyLink');
+      var button = importForm.querySelector('button');
+      var originalButtonHtml = button.innerHTML;
       var notice = document.querySelector('#spotifyNotice');
-      notice.hidden = false;
-      notice.textContent = error.message;
-    }).then(function () { button.disabled = false; });
-  });
+
+      if (notice) notice.hidden = true;
+      button.disabled = true;
+      button.textContent = 'Importing...';
+
+      fetch('../spotify/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ spotifyLink: input.value.trim() })
+      }).then(function (response) {
+        if (!response.ok) {
+          return response.text().then(function (message) {
+            var cleanMsg = message.replace(/<[^>]*>/g, '').trim();
+            if (response.status === 412) throw new Error('Connect Spotify first or paste a public Spotify link.');
+            if (response.status === 502) throw new Error('Spotify could not read that link. Check the link or privacy settings.');
+            throw new Error(cleanMsg.slice(0, 180) || 'Could not read that Spotify link. Make sure it is a valid track, album, or playlist.');
+          });
+        }
+        return response.json();
+      }).then(function (result) {
+        area.value = result.text;
+        if (source) source.value = 'spotify';
+        if (result.mood) {
+          Array.prototype.forEach.call(document.querySelectorAll('[data-mood]'), function (pill) {
+            pill.classList.toggle('active', pill.getAttribute('data-mood') === result.mood);
+          });
+        }
+        input.value = '';
+        showToast('Music imported! Finding art for your vibe...');
+        submitMoodForm();
+      }).catch(function (error) {
+        if (notice) {
+          notice.hidden = false;
+          notice.textContent = error.message;
+        }
+        showToast(error.message);
+      }).then(function () {
+        button.disabled = false;
+        button.innerHTML = originalButtonHtml;
+      });
+    });
+  }
 
   function showToast(message) {
+    if (!toast) return;
     toast.textContent = message;
     toast.classList.add('show');
     window.clearTimeout(toastTimer);
-    toastTimer = window.setTimeout(function () { toast.classList.remove('show'); }, 2500);
+    toastTimer = window.setTimeout(function () { toast.classList.remove('show'); }, 3000);
   }
 
   function escapeHtml(value) {
-    return String(value || '').replace(/[&<>"']/g, function (character) {
-      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character];
+    return String(value || '').replace(/[&<>"']/g, function (ch) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
     });
   }
 
@@ -63,38 +86,55 @@
     });
   });
 
-  form.addEventListener('submit', function (event) {
-    event.preventDefault();
+  function submitMoodForm() {
     if (!area.value.trim()) return;
     loader.hidden = false;
     grid.hidden = true;
+
     fetch('../mood', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ moodText: area.value.trim(), source: source ? source.value : '' })
     }).then(function (response) {
-      if (!response.ok) throw new Error('We couldn’t find your art just now. Please try again.');
+      if (!response.ok) {
+        return response.text().then(function (body) {
+          var msg = body.replace(/<[^>]*>/g, '').trim().slice(0, 200) || 'Could not load artworks. Please try again.';
+          throw new Error(msg);
+        });
+      }
       return response.text();
-    }).then(function (source) {
-      var xml = new DOMParser().parseFromString(source, 'application/xml');
-      if (xml.querySelector('parsererror')) throw new Error('We had trouble reading the collection. Please try again.');
-      renderArtworks(xml.querySelectorAll('artwork'));
-      var mood = xml.querySelector('mood');
-      document.querySelector('#resultMood').textContent = mood ? 'A little ' + mood.textContent : '';
+    }).then(function (xmlText) {
+      var parser = new DOMParser();
+      var xml = parser.parseFromString(xmlText, 'application/xml');
+      var parseError = xml.querySelector('parsererror');
+      if (parseError) {
+        throw new Error('Received unexpected data from the server. Please try again.');
+      }
+      var artworks = xml.querySelectorAll('artwork');
+      renderArtworks(artworks);
+      var moodEl = xml.querySelector('mood');
+      var resultMood = document.querySelector('#resultMood');
+      if (resultMood) resultMood.textContent = moodEl ? 'A little ' + moodEl.textContent : '';
     }).catch(function (error) {
-      grid.innerHTML = '<div class="empty-discovery"><span>\u2601</span><h3>We lost our place for a moment</h3><p>' + escapeHtml(error.message) + '</p></div>';
+      grid.innerHTML = '<div class="empty-discovery"><span>\u2601</span><h3>Something went wrong</h3><p>' + escapeHtml(error.message) + '</p></div>';
     }).then(function () {
       loader.hidden = true;
       grid.hidden = false;
     });
+  }
+
+  form.addEventListener('submit', function (event) {
+    event.preventDefault();
+    submitMoodForm();
   });
 
   function renderArtworks(artworks) {
     grid.innerHTML = '';
-    if (!artworks.length) {
-      grid.innerHTML = '<div class="empty-discovery"><span>✿</span><h3>No matching artworks came back</h3><p>The museum collections did not return images for this search. Try another mood or a more specific description.</p></div>';
+    if (!artworks || artworks.length === 0) {
+      grid.innerHTML = '<div class="empty-discovery"><span>\u2601</span><h3>No artworks found</h3><p>The museum collections did not return any images for this search. Try a different mood or description.</p></div>';
       return;
     }
+    var loadedCount = 0;
     Array.prototype.forEach.call(artworks, function (artwork) {
       var titleNode = artwork.querySelector('title');
       var artistNode = artwork.querySelector('artist');
@@ -107,15 +147,40 @@
         imageURL: imageNode ? imageNode.textContent : '',
         museum: museumNode ? museumNode.textContent : 'Museum'
       };
+      if (!data.imageURL) return; // skip if no image URL
+
       var card = document.createElement('article');
       card.className = 'artwork-card';
-      card.innerHTML = '<div class="artwork-image"><img src="' + escapeHtml(data.imageURL) + '" alt="' + escapeHtml(data.title) + '" loading="lazy"><span class="museum-badge">' + escapeHtml(data.museum) + '</span></div>' +
-        '<div class="artwork-info"><span class="artwork-meta">A MATCH FOR YOUR MOOD</span><h3>' + escapeHtml(data.title) + '</h3><p>' + escapeHtml(data.artist) + '</p><button class="save-button" type="button">♡ Save to journal</button></div>';
+      card.innerHTML =
+        '<div class="artwork-image">' +
+          '<img src="' + escapeHtml(data.imageURL) + '" alt="' + escapeHtml(data.title) + '" loading="lazy">' +
+          '<span class="museum-badge">' + escapeHtml(data.museum) + '</span>' +
+        '</div>' +
+        '<div class="artwork-info">' +
+          '<span class="artwork-meta">A MATCH FOR YOUR MOOD</span>' +
+          '<h3>' + escapeHtml(data.title) + '</h3>' +
+          '<p>' + escapeHtml(data.artist) + '</p>' +
+          '<button class="save-button" type="button">\u2661 Save to journal</button>' +
+        '</div>';
+
+      var img = card.querySelector('img');
       var saveButton = card.querySelector('button');
-      card.querySelector('img').addEventListener('error', function () { card.remove(); });
+
+      img.addEventListener('load', function () { loadedCount++; });
+      img.addEventListener('error', function () {
+        card.remove();
+        if (grid.children.length === 0) {
+          grid.innerHTML = '<div class="empty-discovery"><span>\u2601</span><h3>Images failed to load</h3><p>The museum servers could not deliver images right now. Please try again in a moment.</p></div>';
+        }
+      });
+
       saveButton.addEventListener('click', function () { saveArtwork(data, saveButton); });
       grid.appendChild(card);
     });
+
+    if (grid.children.length === 0) {
+      grid.innerHTML = '<div class="empty-discovery"><span>\u2661</span><h3>No images returned</h3><p>The museums did not return images for this mood. Try a different mood or description.</p></div>';
+    }
   }
 
   function saveArtwork(data, button) {
@@ -126,7 +191,7 @@
       body: new URLSearchParams(data)
     }).then(function (response) {
       if (!response.ok) throw new Error('Save failed');
-      button.textContent = '✓ Saved to journal';
+      button.textContent = '\u2713 Saved to journal';
       button.classList.add('saved');
       showToast('Added to your journal');
     }).catch(function () {
@@ -147,4 +212,9 @@
       }).catch(function () { showToast('Could not save your theme right now'); });
     });
   });
+
+  // Auto-search when Spotify OAuth returns with tracks already in the textarea
+  if (new URLSearchParams(location.search).get('spotify') === 'ready' && area && area.value.trim()) {
+    window.setTimeout(function () { submitMoodForm(); }, 500);
+  }
 }());

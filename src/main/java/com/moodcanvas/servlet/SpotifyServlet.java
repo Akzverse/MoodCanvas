@@ -1,6 +1,7 @@
 package com.moodcanvas.servlet;
 
 import com.moodcanvas.model.User;
+import com.moodcanvas.util.MoodMatcher;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
@@ -17,14 +18,19 @@ import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-/** Optional Spotify OAuth connection. Track details and tokens remain in the signed-in session only. */
+/** Optional Spotify OAuth and link import integration. */
 public class SpotifyServlet extends HttpServlet {
     private static final long serialVersionUID = 1L;
     private static final SecureRandom RANDOM = new SecureRandom();
     private static final String SPOTIFY_SCOPES = "user-read-recently-played playlist-read-private";
+
+    private static volatile String cachedAppToken = null;
+    private static volatile long appTokenExpiresAt = 0;
 
     @Override
     protected void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException, ServletException {
@@ -46,48 +52,144 @@ public class SpotifyServlet extends HttpServlet {
             response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Sign in to import Spotify music.");
             return;
         }
+
         String link = request.getParameter("spotifyLink");
+        if (blank(link)) {
+            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Please paste a Spotify song, album, or playlist link.");
+            return;
+        }
+
         String[] reference = parseSpotifyReference(link);
         if (reference == null) {
-            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Paste a Spotify song or playlist link.");
+            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Could not recognize that link. Paste a Spotify track, album, or playlist link.");
             return;
         }
-        if (blank((String) session.getAttribute("spotifyAccessToken"))) {
-            response.sendError(HttpServletResponse.SC_PRECONDITION_FAILED, "Connect Spotify first, then import this link.");
+
+        String kind = reference[0];
+        String id = reference[1];
+        List<String> tracks = new ArrayList<>();
+
+        // 1. Try with user's OAuth access token if available
+        String userToken = (String) session.getAttribute("spotifyAccessToken");
+        if (!blank(userToken)) {
+            try {
+                fetchTracksWithToken(session, userToken, kind, id, tracks);
+            } catch (Exception e) {
+                getServletContext().log("User token Spotify fetch failed, falling back", e);
+            }
+        }
+
+        // 2. Try with app-level Client Credentials token if tracks still empty
+        if (tracks.isEmpty()) {
+            try {
+                String appToken = getAppToken();
+                if (!blank(appToken)) {
+                    fetchTracksWithToken(null, appToken, kind, id, tracks);
+                }
+            } catch (Exception e) {
+                getServletContext().log("Client credentials Spotify fetch failed, falling back to oEmbed", e);
+            }
+        }
+
+        // 3. Fallback to Spotify open oEmbed endpoint (no keys or authorization needed)
+        if (tracks.isEmpty()) {
+            try {
+                fetchViaOEmbed(link.strip(), tracks);
+            } catch (Exception e) {
+                getServletContext().log("Spotify oEmbed fetch failed", e);
+            }
+        }
+
+        if (tracks.isEmpty()) {
+            response.sendError(HttpServletResponse.SC_NOT_FOUND, "No playable tracks or details could be found for that Spotify link.");
             return;
         }
-        try {
-            String endpoint = "track".equals(reference[0])
-                    ? "https://api.spotify.com/v1/tracks/" + reference[1]
-                    : "https://api.spotify.com/v1/playlists/" + reference[1] + "/items?limit=30";
-            JSONObject payload = spotifyGet(session, endpoint);
-            List<String> tracks = new ArrayList<>();
-            if ("track".equals(reference[0])) {
-                addTrack(payload, tracks);
-            } else {
-                JSONArray items = payload.optJSONArray("items");
-                if (items != null) for (int i = 0; i < items.length() && tracks.size() < 30; i++) {
+
+        String prefix = "playlist".equals(kind) ? "Songs from my Spotify playlist: "
+                : ("album".equals(kind) ? "Songs from Spotify album: " : "A song I chose: ");
+        String summary = prefix + String.join("; ", tracks);
+        if (summary.length() > 950) summary = summary.substring(0, 947) + "…";
+
+        String inferredMood = MoodMatcher.match(summary).tag();
+
+        JSONObject result = new JSONObject()
+                .put("text", summary)
+                .put("count", tracks.size())
+                .put("kind", kind)
+                .put("mood", inferredMood);
+
+        response.getWriter().write(result.toString());
+    }
+
+    private void fetchTracksWithToken(HttpSession session, String token, String kind, String id, List<String> tracks) throws Exception {
+        String endpoint;
+        if ("track".equals(kind)) {
+            endpoint = "https://api.spotify.com/v1/tracks/" + id;
+        } else if ("album".equals(kind)) {
+            endpoint = "https://api.spotify.com/v1/albums/" + id + "/tracks?limit=30";
+        } else {
+            endpoint = "https://api.spotify.com/v1/playlists/" + id + "/tracks?limit=30";
+        }
+
+        JSONObject payload = spotifyGet(token, endpoint);
+        if ("track".equals(kind)) {
+            addTrack(payload, tracks);
+        } else {
+            JSONArray items = payload.optJSONArray("items");
+            if (items != null) {
+                for (int i = 0; i < items.length() && tracks.size() < 30; i++) {
                     JSONObject row = items.optJSONObject(i);
-                    if (row != null) addTrack(row.optJSONObject("track"), tracks);
+                    if (row != null) {
+                        JSONObject trackObj = row.has("track") ? row.optJSONObject("track") : row;
+                        addTrack(trackObj, tracks);
+                    }
                 }
             }
-            if (tracks.isEmpty()) {
-                response.sendError(HttpServletResponse.SC_NOT_FOUND, "No playable tracks were found in that Spotify link.");
-                return;
+        }
+    }
+
+    private void fetchViaOEmbed(String link, List<String> tracks) {
+        try {
+            String url = "https://open.spotify.com/oembed?url=" + URLEncoder.encode(link, StandardCharsets.UTF_8);
+            HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+            conn.setConnectTimeout(6000);
+            conn.setReadTimeout(8000);
+            conn.setRequestProperty("User-Agent", "MoodCanvas/1.0");
+            if (conn.getResponseCode() == 200) {
+                try (var in = conn.getInputStream()) {
+                    JSONObject obj = new JSONObject(new String(in.readAllBytes(), StandardCharsets.UTF_8));
+                    String title = obj.optString("title", "").strip();
+                    if (!title.isEmpty()) {
+                        tracks.add(title);
+                    }
+                }
             }
-            String summary = ("playlist".equals(reference[0]) ? "Songs from my Spotify playlist: " : "A song I chose: ") + String.join("; ", tracks);
-            if (summary.length() > 950) summary = summary.substring(0, 947) + "…";
-            JSONObject result = new JSONObject().put("text", summary).put("count", tracks.size()).put("kind", reference[0]);
-            response.getWriter().write(result.toString());
+            conn.disconnect();
+        } catch (Exception ignored) { }
+    }
+
+    private synchronized String getAppToken() {
+        if (!blank(cachedAppToken) && System.currentTimeMillis() < appTokenExpiresAt - 30000) {
+            return cachedAppToken;
+        }
+        String clientID = System.getenv("MOODCANVAS_SPOTIFY_CLIENT_ID");
+        String clientSecret = System.getenv("MOODCANVAS_SPOTIFY_CLIENT_SECRET");
+        if (blank(clientID) || blank(clientSecret)) return null;
+
+        try {
+            JSONObject token = postToken("grant_type=client_credentials");
+            cachedAppToken = token.optString("access_token", null);
+            appTokenExpiresAt = System.currentTimeMillis() + token.optLong("expires_in", 3600) * 1000L;
+            return cachedAppToken;
         } catch (Exception e) {
-            getServletContext().log("Could not import Spotify link", e);
-            response.sendError(HttpServletResponse.SC_BAD_GATEWAY, "Spotify could not read that link. For playlists, connect the account that owns or collaborates on it.");
+            return null;
         }
     }
 
     private String[] parseSpotifyReference(String link) {
         if (blank(link)) return null;
-        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("(?:https?://open\\.spotify\\.com/|spotify:)(track|playlist)[/:]([A-Za-z0-9]{22})").matcher(link.strip());
+        // Matches (track|playlist|album) followed by / or : and 22 base62 characters anywhere in the string
+        Matcher matcher = Pattern.compile("(track|playlist|album)[/:]([A-Za-z0-9]{22})").matcher(link.strip());
         return matcher.find() ? new String[] { matcher.group(1), matcher.group(2) } : null;
     }
 
@@ -96,27 +198,30 @@ public class SpotifyServlet extends HttpServlet {
         String title = track.optString("name", "").strip();
         JSONArray artists = track.optJSONArray("artists");
         StringBuilder names = new StringBuilder();
-        if (artists != null) for (int i = 0; i < artists.length(); i++) {
-            JSONObject artist = artists.optJSONObject(i);
-            String name = artist == null ? "" : artist.optString("name", "").strip();
-            if (!name.isEmpty()) { if (!names.isEmpty()) names.append(", "); names.append(name); }
+        if (artists != null) {
+            for (int i = 0; i < artists.length(); i++) {
+                JSONObject artist = artists.optJSONObject(i);
+                String name = artist == null ? "" : artist.optString("name", "").strip();
+                if (!name.isEmpty()) {
+                    if (!names.isEmpty()) names.append(", ");
+                    names.append(name);
+                }
+            }
         }
         if (!title.isEmpty()) tracks.add(names.isEmpty() ? title : title + " — " + names);
     }
 
-    private JSONObject spotifyGet(HttpSession session, String endpoint) throws Exception {
-        String token = (String) session.getAttribute("spotifyAccessToken");
-        Object expires = session.getAttribute("spotifyExpiresAt");
-        if (blank(token) || !(expires instanceof Long time) || time < System.currentTimeMillis() + 30000) {
-            refreshToken(session);
-            token = (String) session.getAttribute("spotifyAccessToken");
-        }
+    private JSONObject spotifyGet(String token, String endpoint) throws Exception {
         HttpURLConnection connection = (HttpURLConnection) new URL(endpoint).openConnection();
-        connection.setConnectTimeout(7000); connection.setReadTimeout(10000);
+        connection.setConnectTimeout(7000);
+        connection.setReadTimeout(10000);
         connection.setRequestProperty("Authorization", "Bearer " + token);
+        connection.setRequestProperty("User-Agent", "MoodCanvas/1.0");
         try (var stream = connection.getInputStream()) {
             return new JSONObject(new String(stream.readAllBytes(), StandardCharsets.UTF_8));
-        } finally { connection.disconnect(); }
+        } finally {
+            connection.disconnect();
+        }
     }
 
     private void connect(HttpServletRequest request, HttpServletResponse response) throws IOException {
@@ -134,8 +239,6 @@ public class SpotifyServlet extends HttpServlet {
         String redirectURI = redirectURI(request);
         URI callback = URI.create(redirectURI);
         if (!callback.getHost().equalsIgnoreCase(request.getServerName()) || callback.getPort() != request.getServerPort()) {
-            // Spotify accepts 127.0.0.1 but not "localhost" as a loopback redirect URI.
-            // Canonicalizing before creating OAuth state keeps the session cookie on one host.
             String canonical = callback.getScheme() + "://" + callback.getRawAuthority() + request.getContextPath() + "/spotify/connect";
             response.sendRedirect(canonical);
             return;
